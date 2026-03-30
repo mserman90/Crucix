@@ -18,6 +18,7 @@ import { briefing as who } from './sources/who.mjs';
 import { briefing as ofac } from './sources/ofac.mjs';
 import { briefing as opensanctions } from './sources/opensanctions.mjs';
 import { briefing as adsb } from './sources/adsb.mjs';
+import { briefing as ucdp } from './sources/ucdp.mjs';
 
 // === Tier 2: Economic & Financial ===
 import { briefing as fred } from './sources/fred.mjs';
@@ -67,7 +68,7 @@ export async function runSource(name, fn, ...args) {
 }
 
 export async function fullBriefing() {
-  console.error('[Crucix] Starting intelligence sweep — 29 sources...');
+  console.error('[Crucix] Starting intelligence sweep — 30 sources...');
   const start = Date.now();
 
   const allPromises = [
@@ -83,6 +84,7 @@ export async function fullBriefing() {
     runSource('OFAC', ofac),
     runSource('OpenSanctions', opensanctions),
     runSource('ADS-B', adsb),
+    runSource('UCDP', ucdp),
 
     // Tier 2: Economic & Financial
     runSource('FRED', fred, process.env.FRED_API_KEY),
