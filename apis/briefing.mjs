@@ -50,6 +50,10 @@ import { briefing as cloudflareRadar } from './sources/cloudflare-radar.mjs';
 
 const SOURCE_TIMEOUT_MS = 30_000; // 30s max per individual source
 
+// Batch size for concurrent source fetches — lower = less memory, slower sweep
+// Set SWEEP_BATCH_SIZE env var to override (default 6 for low-memory hosts)
+const BATCH_SIZE = parseInt(process.env.SWEEP_BATCH_SIZE, 10) || 6;
+
 export async function runSource(name, fn, ...args) {
   const start = Date.now();
   let timer;
@@ -67,57 +71,71 @@ export async function runSource(name, fn, ...args) {
   }
 }
 
+// Run sources in batches to limit peak memory usage on constrained hosts
+async function runBatched(tasks, batchSize) {
+  const results = [];
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    console.error(`[Crucix] Sweep batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(tasks.length / batchSize)} (${batch.length} sources)`);
+    const batchResults = await Promise.allSettled(batch.map(t => t()));
+    results.push(...batchResults);
+    // Allow GC between batches
+    if (global.gc) global.gc();
+  }
+  return results;
+}
+
 export async function fullBriefing() {
-  console.error('[Crucix] Starting intelligence sweep — 30 sources...');
+  console.error(`[Crucix] Starting intelligence sweep — 30 sources (batch size: ${BATCH_SIZE})...`);
   const start = Date.now();
 
-  const allPromises = [
+  // Define sources as lazy thunks so they only execute when their batch runs
+  const allTasks = [
     // Tier 1: Core OSINT & Geopolitical
-    runSource('GDELT', gdelt),
-    runSource('OpenSky', opensky),
-    runSource('FIRMS', firms),
-    runSource('Maritime', ships),
-    runSource('Safecast', safecast),
-    runSource('ACLED', acled),
-    runSource('ReliefWeb', reliefweb),
-    runSource('WHO', who),
-    runSource('OFAC', ofac),
-    runSource('OpenSanctions', opensanctions),
-    runSource('ADS-B', adsb),
-    runSource('UCDP', ucdp),
+    () => runSource('GDELT', gdelt),
+    () => runSource('OpenSky', opensky),
+    () => runSource('FIRMS', firms),
+    () => runSource('Maritime', ships),
+    () => runSource('Safecast', safecast),
+    () => runSource('ACLED', acled),
+    () => runSource('ReliefWeb', reliefweb),
+    () => runSource('WHO', who),
+    () => runSource('OFAC', ofac),
+    () => runSource('OpenSanctions', opensanctions),
+    () => runSource('ADS-B', adsb),
+    () => runSource('UCDP', ucdp),
 
     // Tier 2: Economic & Financial
-    runSource('FRED', fred, process.env.FRED_API_KEY),
-    runSource('Treasury', treasury),
-    runSource('BLS', bls, process.env.BLS_API_KEY),
-    runSource('EIA', eia, process.env.EIA_API_KEY),
-    runSource('GSCPI', gscpi),
-    runSource('USAspending', usaspending),
-    runSource('Comtrade', comtrade),
+    () => runSource('FRED', fred, process.env.FRED_API_KEY),
+    () => runSource('Treasury', treasury),
+    () => runSource('BLS', bls, process.env.BLS_API_KEY),
+    () => runSource('EIA', eia, process.env.EIA_API_KEY),
+    () => runSource('GSCPI', gscpi),
+    () => runSource('USAspending', usaspending),
+    () => runSource('Comtrade', comtrade),
 
     // Tier 3: Weather, Environment, Technology, Social
-    runSource('NOAA', noaa),
-    runSource('EPA', epa),
-    runSource('Patents', patents),
-    runSource('Bluesky', bluesky),
-    runSource('Reddit', reddit),
-    runSource('Telegram', telegram),
-    runSource('KiwiSDR', kiwisdr),
+    () => runSource('NOAA', noaa),
+    () => runSource('EPA', epa),
+    () => runSource('Patents', patents),
+    () => runSource('Bluesky', bluesky),
+    () => runSource('Reddit', reddit),
+    () => runSource('Telegram', telegram),
+    () => runSource('KiwiSDR', kiwisdr),
 
     // Tier 4: Space & Satellites
-    runSource('Space', space),
+    () => runSource('Space', space),
 
     // Tier 5: Live Market Data
-    runSource('YFinance', yfinance),
+    () => runSource('YFinance', yfinance),
 
     // Tier 6: Cyber & Infrastructure
-    runSource('CISA-KEV', cisaKev),
-    runSource('Cloudflare-Radar', cloudflareRadar),
+    () => runSource('CISA-KEV', cisaKev),
+    () => runSource('Cloudflare-Radar', cloudflareRadar),
   ];
 
-  // Each runSource has its own 30s timeout, so allSettled will resolve
-  // within ~30s even if APIs hang. Global timeout is a safety net.
-  const results = await Promise.allSettled(allPromises);
+  // Run in batches to keep memory under control on free-tier hosts
+  const results = await runBatched(allTasks, BATCH_SIZE);
 
   const sources = results.map(r => r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason?.message });
   const totalMs = Date.now() - start;

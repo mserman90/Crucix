@@ -16,4 +16,5 @@ EXPOSE 3117
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
   CMD wget -qO- http://localhost:3117/api/health || exit 1
 
-CMD ["node", "server.mjs"]
+# Limit heap to 384MB to stay under 512MB container limit (OS + stack overhead)
+CMD ["node", "--max-old-space-size=384", "server.mjs"]
